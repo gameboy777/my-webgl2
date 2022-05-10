@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+  <link rel="stylesheet" href="./../webgl-tutorials.css">
+  <style>
+    body {
+      margin: 0;
+    }
+
+    canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+  </style>
+  <script src="./../webgl-utils.js"></script>
+  <script src="./../webgl-lessons-ui.js"></script>
+</head>
+
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="uiContainer">
+    <div id="ui">
+      <div id="x"></div>
+      <div id="y"></div>
+    </div>
+  </div>
+  <script>
+    "use strict";
+
+    var vertexShaderSource = `#version 300 es
+
+    // an attribute is an input (in) to a vertex shader.
+    // It will receive data from a buffer
+    //属性是输入(in)顶点着色器的，从缓冲接收数据
+    in vec2 a_position;
+
+    // Used to pass in the resolution of the canvas
+    //用于传入画布的分辨率
+    uniform vec2 u_resolution;
+
+    // translation to add to position
+    //用于传入平移量
+    uniform vec2 u_translation;
+
+    // all shaders have a main function
+    //所有着色器都有一个主方法
+    void main() {
+      // Add in the translation
+      //加上平移量
+      vec2 position = a_position + u_translation;
+
+      // convert the position from pixels to 0.0 to 1.0
+      //从像素坐标转换到 0.0 到 1.0
+      vec2 zeroToOne = position / u_resolution;
+
+      // convert from 0->1 to 0->2
+      //转换 0->1 为 0->2
+      vec2 zeroToTwo = zeroToOne * 2.0;
+
+      // convert from 0->2 to -1->+1 (clipspace)
+      //转换 0->2 为 -1->+1 (裁剪空间坐标)
+      vec2 clipSpace = zeroToTwo - 1.0;
+
+      gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+    }
+    `;
+
+    var fragmentShaderSource = `#version 300 es
+
+    precision highp float;
+
+    uniform vec4 u_color;
+
+    // we need to declare an output for the fragment shader
+    out vec4 outColor;
+
+    void main() {
+      outColor = u_color;
+    }
+    `;
+
+    function main() {
+      // Get A WebGL context
+      /** @type {HTMLCanvasElement} */
+      var canvas = document.querySelector("#canvas");
+      var gl = canvas.getContext("webgl2");
+      if (!gl) {
+        return;
+      }
+
+      // Use our boilerplate utils to compile the shaders and link into a program
+      var program = webglUtils.createProgramFromSources(gl,
+        [vertexShaderSource, fragmentShaderSource]);
+
+      // look up where the vertex data needs to go.
+      var positionAttributeLocation = gl.getAttribLocation(program, "a_position");
+
+      // look up uniform locations
+      var resolutionUniformLocation = gl.getUniformLocation(program, "u_resolution");
+      var colorLocation = gl.getUniformLocation(program, "u_color");
+      var translationLocation = gl.getUniformLocation(program, "u_translation");
+
+      // Create a buffer
+      var positionBuffer = gl.createBuffer();
+
+      // Create a vertex array object (attribute state)
+      var vao = gl.createVertexArray();
+
+      // and make it the one we're currently working with
+      gl.bindVertexArray(vao);
+
+      // Turn on the attribute
+      gl.enableVertexAttribArray(positionAttributeLocation);
+
+      // Bind it to ARRAY_BUFFER (think of it as ARRAY_BUFFER = positionBuffer)
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      // Set Geometry.
+      //设置物体
+      setGeometry(gl);
+
+      // Tell the attribute how to get data out of positionBuffer (ARRAY_BUFFER)
+      var size = 2;          // 2 components per iteration
+      var type = gl.FLOAT;   // the data is 32bit floats
+      var normalize = false; // don't normalize the data
+      var stride = 0;        // 0 = move forward size * sizeof(type) each iteration to get the next position
+      var offset = 0;        // start at the beginning of the buffer
+      gl.vertexAttribPointer(
+        positionAttributeLocation, size, type, normalize, stride, offset);
+
+      // First let's make some variables
+      // to hold the translation,
+      var translation = [0, 0];
+      var color = [Math.random(), Math.random(), Math.random(), 1];
+
+      drawScene();
+
+      // Setup a ui.
+      webglLessonsUI.setupSlider("#x", { slide: updatePosition(0), max: gl.canvas.width });
+      webglLessonsUI.setupSlider("#y", { slide: updatePosition(1), max: gl.canvas.height });
+
+      function updatePosition(index) {
+        return function (event, ui) {
+          translation[index] = ui.value;
+          drawScene();
+        };
+      }
+
+      // Draw the scene.
+      //绘制场景
+      function drawScene() {
+        webglUtils.resizeCanvasToDisplaySize(gl.canvas);
+
+        // Tell WebGL how to convert from clip space to pixels
+        //告诉 WebGL 如何转换裁剪空间坐标为像素坐标
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+
+        // Clear the canvas
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        // Tell it to use our program (pair of shaders)
+        gl.useProgram(program);
+
+        // Bind the attribute/buffer set we want.
+        gl.bindVertexArray(vao);
+
+        // Pass in the canvas resolution so we can convert from
+        // pixels to clipspace in the shader
+        gl.uniform2f(resolutionUniformLocation, gl.canvas.width, gl.canvas.height);
+
+        // Set the color.
+        gl.uniform4fv(colorLocation, color);
+
+        // Set the translation.
+        //设置平移
+        gl.uniform2fv(translationLocation, translation);
+
+        // Draw the geometry.
+        var primitiveType = gl.TRIANGLES;
+        var offset = 0;
+        var count = 18;
+        gl.drawArrays(primitiveType, offset, count);
+      }
+    }
+
+    // Fill the current ARRAY_BUFFER buffer
+    // with the values that define a letter 'F'.
+    //在当前 ARRAY_BUFFER 缓冲存储构成 'F' 的值
+    //注意到setGeometry只调用了一次，它不在drawScene内部了。
+    function setGeometry(gl) {
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        new Float32Array([
+          // left column
+          0, 0,
+          30, 0,
+          0, 150,
+          0, 150,
+          30, 0,
+          30, 150,
+
+          // top rung
+          30, 0,
+          100, 0,
+          30, 30,
+          30, 30,
+          100, 0,
+          100, 30,
+
+          // middle rung
+          30, 60,
+          67, 60,
+          30, 90,
+          30, 90,
+          67, 60,
+          67, 90,
+        ]),
+        gl.STATIC_DRAW);
+    }
+
+    main();
+
+  </script>
+</body>
+
+</html>

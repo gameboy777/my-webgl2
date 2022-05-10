@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+  <link rel="stylesheet" href="./../webgl-tutorials.css">
+  <style>
+    body {
+      margin: 0;
+    }
+
+    canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+  </style>
+  <script src="./../webgl-utils.js"></script>
+</head>
+
+<body>
+  <canvas id="c"></canvas>
+  <script>
+    "use strict";
+
+    var vertexShaderSource = `#version 300 es
+
+        // an attribute is an input (in) to a vertex shader.
+        // It will receive data from a buffer
+        in vec4 a_position;
+
+        // all shaders have a main function
+        void main() {
+
+        // gl_Position is a special variable a vertex shader
+        // is responsible for setting
+        gl_Position = a_position;
+        }
+        `;
+
+    //我们声明了outColor作为片段着色器的输出，并设置值为1, 0, 0.5, 1。
+    var fragmentShaderSource = `#version 300 es
+
+        // fragment shaders don't have a default precision so we need
+        // to pick one. highp is a good default. It means "high precision"
+        precision highp float;
+
+        // we need to declare an output for the fragment shader
+        out vec4 outColor;
+
+        void main() {
+        // Just set the output to a constant redish-purple
+        outColor = vec4(1, 0, 0.5, 1);
+        }
+        `;
+
+    //我们需要一个函数创建着色器实例、上传GLSL源码和编译着色器。
+    function createShader(gl, type, source) {
+      var shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      var success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+      if (success) {
+        return shader;
+      }
+
+      console.log(gl.getShaderInfoLog(shader));  // eslint-disable-line
+      gl.deleteShader(shader);
+      return undefined;
+    }
+
+    //然后我们链接这两个着色器成一个程序(program)
+    function createProgram(gl, vertexShader, fragmentShader) {
+      var program = gl.createProgram();
+      gl.attachShader(program, vertexShader);
+      gl.attachShader(program, fragmentShader);
+      gl.linkProgram(program);
+      var success = gl.getProgramParameter(program, gl.LINK_STATUS);
+      if (success) {
+        return program;
+      }
+
+      console.log(gl.getProgramInfoLog(program));  // eslint-disable-line
+      gl.deleteProgram(program);
+      return undefined;
+    }
+
+    function main() {
+      // Get A WebGL context
+      var canvas = document.querySelector("#c");
+      var gl = canvas.getContext("webgl2");
+      if (!gl) {
+        return;
+      }
+
+      // create GLSL shaders, upload the GLSL source, compile the shaders
+      var vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+      var fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+      // Link the two shaders into a program
+      var program = createProgram(gl, vertexShader, fragmentShader);
+
+      // look up where the vertex data needs to go.
+      //在GPU上已经创建了一个GLSL程序后，我们还需要提供数据给它。大多数WebGL API是有关设置状态来供给GLSL程序数据的。 在我们的例子中，GLSL程序唯一的输入属性是a_position。我们做的第一件事就是查找这个属性的位置。记住在查找属性是在程序初始化的时候，而不是render循环的时候。
+      var positionAttributeLocation = gl.getAttribLocation(program, "a_position");
+
+      // Create a buffer and put three 2d clip space points in it
+      //属性从缓存区中取数据，所以我们需要创建缓冲区。
+      var positionBuffer = gl.createBuffer();
+
+      // Bind it to ARRAY_BUFFER (think of it as ARRAY_BUFFER = positionBuffer)
+      //WebGL通过绑定点来处理许多WebGL资源。你可以认为绑定点是WebGL内部的全局变量。首先你绑定一个资源到某个绑定点，然后所有方法通过这个绑定点来对这个资源的访问。下面我们来绑定缓冲区。
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+
+      //现在我们通过绑定点把数据存放到缓冲区。
+      //Javascript弱类型语言，而WebGL需要强类型数据，需要用new Float32Array(positions)创建32位的浮点数数组，然后用gl.bufferData函数将数组数据拷贝到GPU上的positionBuffer里面。因为前面把positionBuffer绑定到了ARRAY_BUFFER，所以我们直接使用绑定点。
+      //最后一个参数gl.STATIC_DRAW提示WebGL如何使用数据，WebGL据此做相应的优化。gl.STATIC_DRAW 告诉WebGL我们不太可能去改变数据的值。
+      var positions = [
+        0, 0,
+        0, 0.5,
+        0.7, 0,
+      ];
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+      // Create a vertex array object (attribute state)
+      //数据存放到缓存区后，接下来需要告诉属性如何从缓冲区取出数据。首先，我需要创建属性状态集合：顶点数组对象(Vertex Array Object)。
+      var vao = gl.createVertexArray();
+
+      // and make it the one we're currently working with
+      //为了使所有属性的设置能够应用到WebGL属性状态集，我们需要绑定这个顶点数组到WebGL。
+      gl.bindVertexArray(vao);
+
+      // Turn on the attribute
+      //然后，我们还需要启用属性。如果没有开启这个属性，这个属性值会是一个常量。
+      gl.enableVertexAttribArray(positionAttributeLocation);
+
+      // Tell the attribute how to get data out of positionBuffer (ARRAY_BUFFER)
+      //接下来，我们需要设置属性值如何从缓存区取出数据。
+      //gl.vertexAttribPointer 的隐含部分是它绑定当前的ARRAY_BUFFER到这个属性。换句话说，这个属性被绑定到positionBuffer。
+      //vec4是一个浮点型的数。以javascript来看，你可以认为它是这样的a_position = {x: 0, y: 0, z: 0, w: 0}。我们设置size = 2, 属性值被设置为0, 0, 0, 1。 属性获取前两个坐标值(x和y) ,z和w分别被默认设置为0和1。
+      var size = 2;          // 2 components per iteration
+      var type = gl.FLOAT;   // the data is 32bit floats
+      var normalize = false; // don't normalize the data
+      var stride = 0;        // 0 = move forward size * sizeof(type) each iteration to get the next position
+      var offset = 0;        // start at the beginning of the buffer
+      //这条命令告诉WebGL我们想要从缓冲区取数据
+      //上面这条命令告诉WebGL：从最后调用gl.bindBuffer绑定的缓冲区中获取数据； 每个顶点有多少个（1-4）分量；数据类型是什么（BYTE，FLOAT，INT，UNSIGNED_SHORT等）； 从一条数据到下一条数据需要跳过的字节数; 以及数据在缓冲区的偏移量。
+      gl.vertexAttribPointer(
+        positionAttributeLocation, size, type, normalize, stride, offset);
+
+      webglUtils.resizeCanvasToDisplaySize(gl.canvas);
+
+      // Tell WebGL how to convert from clip space to pixels
+      //通过设置gl_Position, 我们需要告诉WebGL如何从剪辑空间转换值转换到屏幕空间。 为此，我们调用gl.viewport并将其传递给画布的当前大小。
+      //这行代码告诉WebGL将裁剪空间的-1~+1映射到x轴0~gl.canvas.width和y轴0~gl.canvas.height。
+      gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+
+      // Clear the canvas
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      // Tell it to use our program (pair of shaders)
+      //接下来我们需要告诉WebGL运行着色器程序。
+      gl.useProgram(program);
+
+      // Bind the attribute/buffer set we want.
+      //然后我们需要告诉它用哪个缓冲区和如何从缓冲区取出数据给到属性。
+      gl.bindVertexArray(vao);
+
+      // draw
+      //最后，我们告诉WebGL运行我们的GLSL程序。
+      //由于counter被设置为3, 顶点着色器就会运行3次；第一次运行顶点着色器中的属性a_position.x 和 a_position.y的值是positionBuffer的头两个值；第二次是紧接着的两个值。
+      //WebGL会用这三个顶点画出三角形。对于每个像素，WebGL调用片段着色器。片段着色器设置outColor为1, 0, 0.5, 1，加上画布上每个channel为8bit，WebGL把颜色值[255, 0, 127, 255]的像素写到画布。
+      var primitiveType = gl.TRIANGLES;
+      var offset = 0;
+      var count = 3;
+      gl.drawArrays(primitiveType, offset, count);
+    }
+
+    main();
+
+  </script>
+</body>
+
+</html>
