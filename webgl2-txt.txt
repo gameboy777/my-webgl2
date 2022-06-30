@@ -1,0 +1,311 @@
+1、实际上WebGL仅仅是栅格化(rasterization)引擎。它会基于你的代码来画点，线条和三角形。 而你需要使用点、线、三角形组合来完成复杂的3D任务。
+
+2、WebGL是在GPU上运行的。在GPU上运行的WebGL代码是以一对函数的形式，分别叫做点着色器(Vetex Shader)和片段着色器(Fragment Shader). 他们是用一种类似C++的强类型语言GLSL编写的。这一对函数组合被叫做程序(Program)。
+  点着色器的任务是计算点的的位置。基于函数输出的位置，WebGL能够栅格化(rasterize)不同种类的基本元素，如点、线和三角形。当栅格化这些基本元素的同时，也会调用第二种函数：片段着色器。它的任务就是计算当前正在绘制图形的每个像素的颜色。
+  几乎所有的WebGL API是为这些函数对的运行来设置状态。你需要做的是：设置一堆状态，然后调用gl.drawArrays和gl.drawElements在GPU上运行你的着色器。
+  这些函数需要用到的任意数据都必须提供给GPU。 着色器有如下四种方法能够接收数据。
+    1、属性(Attributes)，缓冲区(Buffers)和顶点数组(Vetex Arrays)
+      缓存区以二进制数据形式的数组传给GPU。缓存区可以放任意数据，通常有位置，归一化参数，纹理坐标，顶点颜色等等
+      属性用来指定数据如何从缓冲区获取并提供给顶点着色器。比如你可能将位置信息以3个32位的浮点数据存在缓存区中， 一个特定的属性包含的信息有：它来自哪个缓存区，它的数据类型(3个32位浮点数据)，在缓存区的起始偏移量，从一个位置到下一个位置有多少个字节等等。
+      缓冲区并非随机访问的，而是将顶点着色器执行指定次数。每次执行时，都会从每个指定的缓冲区中提取下一个值并分配给一个属性。
+      属性的状态收集到一个顶点数组对象（VAO）中，该状态作用在每个缓冲区，以及如何从这些缓冲区中提取数据。
+    2、Uniforms
+      Uniforms是在执行着色器程序前设置的全局变量
+    3、纹理(Textures)
+      纹理是能够在着色器程序中随机访问的数组数据。大多数情况下纹理存储图片数据，但它也用于包含颜色以为的数据。
+    4、Varyings
+      Varyings是一种从点着色器到片段着色器传递数据的方法。根据显示的内容如点，线或三角形， 顶点着色器在Varyings中设置的值，在运行片段着色器的时候会被解析。
+
+3、WebGL只关注两件事：剪辑空间坐标(Clip space coordinates)和颜色。 所以作为程序员，你的任务是向WebGL提供这两件事--编写两种着色器的代码: 点着色器提供剪辑空间坐标；片段着色器提供颜色。
+  不管你的画布大小，剪辑空间坐标的取值范围是-1到1. 
+
+4、注意： #version 300 es 必须位于着色器代码的第一行。 它前面不允许有任何的注释或空行！ #version 300 es 的意思是你想要使用WebGL2的着色器语法:GLSL ES 3.00。 如果你没有把它放到第一行，将默认设置为GLSL ES 1.00,即WebGL1.0的语法。相比WebGL2的语法，会少很多特性。
+
+5、在GPU上已经创建了一个GLSL程序后，我们还需要提供数据给它。大多数WebGL API是有关设置状态来供给GLSL程序数据的。 在我们的例子中，GLSL程序唯一的输入属性是a_position。我们做的第一件事就是查找这个属性的位置。记住在查找属性是在程序初始化的时候，而不是render循环的时候。
+  var positionAttributeLocation = gl.getAttribLocation(program, "a_position");
+
+6、WebGL通过绑定点来处理许多WebGL资源。你可以认为绑定点是WebGL内部的全局变量。首先你绑定一个资源到某个绑定点，然后所有方法通过这个绑定点来对这个资源的访问。下面我们来绑定缓冲区。
+  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+  现在我们通过绑定点把数据存放到缓冲区。
+  // three 2d points
+  var positions = [
+    0, 0,
+    0, 0.5,
+    0.7, 0,
+  ];
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+  Javascript弱类型语言，而WebGL需要强类型数据，需要用new Float32Array(positions)创建32位的浮点数数组，然后用gl.bufferData函数将数组数据拷贝到GPU上的positionBuffer里面。因为前面把positionBuffer绑定到了ARRAY_BUFFER，所以我们直接使用绑定点。
+  最后一个参数gl.STATIC_DRAW提示WebGL如何使用数据，WebGL据此做相应的优化。gl.STATIC_DRAW 告诉WebGL我们不太可能去改变数据的值。
+
+7、数据存放到缓存区后，接下来需要告诉属性如何从缓冲区取出数据。首先，我需要创建属性状态集合：顶点数组对象(Vertex Array Object)。
+  var vao = gl.createVertexArray();
+  为了使所有属性的设置能够应用到WebGL属性状态集，我们需要绑定这个顶点数组到WebGL。
+  gl.bindVertexArray(vao);
+  然后，我们还需要启用属性。如果没有开启这个属性，这个属性值会是一个常量。
+  gl.enableVertexAttribArray(positionAttributeLocation);
+  接下来，我们需要设置属性值如何从缓存区取出数据。
+  var size = 2;          // 2 components per iteration
+  var type = gl.FLOAT;   // the data is 32bit floats
+  var normalize = false; // don't normalize the data
+  var stride = 0;        // 0 = move forward size * sizeof(type) each iteration to get the next position
+  var offset = 0;        // start at the beginning of the buffer
+  gl.vertexAttribPointer(
+    positionAttributeLocation, size, type, normalize, stride, offset)
+  gl.vertexAttribPointer 的隐含部分是它绑定当前的ARRAY_BUFFER到这个属性。换句话说，这个属性被绑定到positionBuffer。
+
+8、通过设置gl_Position, 我们需要告诉WebGL如何从剪辑空间转换值转换到屏幕空间。 为此，我们调用gl.viewport并将其传递给画布的当前大小。
+  gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+  这行代码告诉WebGL将裁剪空间的-1~+1映射到x轴0~gl.canvas.width和y轴0~gl.canvas.height。
+  我们设置画布的清空颜色为0,0,0,0(分别表示为红色，绿色，蓝色，透明度)。所以这个画布是透明的。
+
+9、然后我们需要告诉它用哪个缓冲区和如何从缓冲区取出数据给到属性。
+  // Bind the attribute/buffer set we want.
+  gl.bindVertexArray(vao);
+
+10、由于我们设置primitiveType的值为gl.TRIANGLES, 顶点着色器将会基于a_position设置的3对值画三角形。不管画布多大，这些值在裁剪空间坐标的范围是-1到1。
+
+11、我希望你能看到WebGL实际上是很简单的API.简单的意思是，它仅仅运行两个函数(顶点着色器和片段着色器)来画三角形，线段和点。 然而3D绘制可以变得非常地复杂，这复杂性是由程序员来设计复杂着色器来实现的。 WebGL API仅仅是一个简单的栅格化工具(rasterizer)。
+
+12、GPU 基本做了两部分事情： 第一部分是处理顶点(数据流)，变成裁剪空间节点；第二部分是基于第一部分的结果绘制像素。
+
+13、左边是你提供的数据。点着色器是用GLSL写的函数。 每个顶点都用调用一次它。在这个函数里面， 做了一些数学运算和设置裁剪空间的顶点坐标 到一个特殊变量gl_position。GPU 获得了这些坐标值并在内部存起来。
+  假设你在画一些三角形，每次 GPU 都会取出 3 个顶点来生成三角形。它指出三角形的 3 个点对应哪些像素， 然后这些像素值画出这个三角形，这个过程就叫“像素栅格化”。对于每个像素，都会调用片段着色器。 它有一个 vec4 类型的输出变量，它指示绘制像素的颜色是什么。
+
+14、“varyings”就能够从点着色器传值到片段着色器。
+  WebGL 将会连接在点着色器和片段着色器中拥有相同名称和类型的 varying 变量。
+
+15、现在想一想，我们只计算了 3 个顶点。点着色器仅仅调用 3 次，也只计算 3 种颜色， 但是三角形却又许多种颜色。也就是我们叫它varying的原因。
+  实际上，当 GPU 栅格化这个三角形的时候，它会基于这个三个顶点的颜色值做插值计算。 然后，WebGL 会基于这些插值来调用片段着色器。
+
+16、缓冲区是将顶点和将每个顶点数据传给GPU的方法。 gl.createBuffer创建一个缓冲区。 gl.bindBuffer将该缓冲区设置为正在处理的缓冲区。 gl.bufferData将数据复制到当前缓冲区中。
+  数据进入缓冲区后，我们需要告诉WebGL如何获取数据并将其提供给顶点着色器的属性。
+  gl.vertexAttribPointer(
+    location,
+    numComponents,
+    typeOfData,
+    normalizeFlag,
+    strideToNextPieceOfData,
+    offsetIntoBuffer);
+  上面这条命令告诉WebGL：从最后调用gl.bindBuffer绑定的缓冲区中获取数据； 每个顶点有多少个（1-4）分量；数据类型是什么（BYTE，FLOAT，INT，UNSIGNED_SHORT等）； 从一条数据到下一条数据需要跳过的字节数; 以及数据在缓冲区的偏移量。
+  如果每种数据类型使用1个缓冲区，则步幅和偏移量都可以始终为0。 步幅0表示“使用与类型和大小匹配的步幅”。 偏移量为0表示从缓冲区的开头开始。 将它们设置为非0的值更为复杂，尽管在性能方面可能会有一些好处， 但是除非您试图将WebGL推向其绝对极限，否则不值得为此付出麻烦。
+
+17、vertexAttribPointer中的normalizeFlag是什么？
+  normalizeFlag适用于所有非浮点类型。 如果通过如果为false，则值将被解释为它们的类型。 BYTE从-128到127，UNSIGNED_BYTE从0到255，SHORT INTEGER从-32768到32767等...
+  如果将normalize标志设置为true，则BYTE的值（-128至127）表示值-1.0至+ 1.0， UNSIGNED_BYTE（0至255）变为0.0至+1.0。标准化的SHORT INTEGER也从-1.0变为+1.0，它的分辨率比BYTE高。
+  归一化数据的最常见用途是颜色。 大多数时候颜色仅从0.0到1.0。 如果红色，绿色，蓝色和Alpha分别使用一个完整的浮点数,每个顶点的每种颜色将使用16个字节。 如果您有复杂的几何体，将会可以增加很多字节。 相反，您可以将颜色转换为UNSIGNED_BYTEs (其中0代表0.0，255代表1.0)。 现在每种颜色只需要4个字节,每个顶点可节省75％的空间。
+
+18、每次画图你都需要 2 个着色器： 点着色器和片段着色器。 每个着色器都是一个函数。 点着色器和片段着色器链接在一起， 成为一个着色器程序（或仅仅是程序）。典型的 WebGL 应用程序将具有许多着色器程序。
+  1、点着色器的工作是生成裁剪空间坐标。绘制的每个点都需要调用这个着色器函数一次。每次调用，都需要通过设置一个全局变量gl_Position来设置该点在裁剪空间的坐标。点着色器需要获得的数据来源有下面三种方式：
+    1、属性 (从缓冲区取数据)
+      点着色器获取数据的最常见方法是通过缓冲区和属性。
+    2、Uniforms (在单次绘制过程中，它的值对所有顶点都是一样的)
+      对于任何顶点来说，在调用点着色器的时候，uniforms 的值都是一样的。
+      Uniforms 可以是各种不同的数据类型。每种类型对应不同名称的赋值方法调用。
+      gl.uniform1f (floatUniformLoc, v);                 // for float
+      gl.uniform1fv(floatUniformLoc, [v]);               // for float or float array
+      gl.uniform2f (vec2UniformLoc,  v0, v1);            // for vec2
+      gl.uniform2fv(vec2UniformLoc,  [v0, v1]);          // for vec2 or vec2 array
+      gl.uniform3f (vec3UniformLoc,  v0, v1, v2);        // for vec3
+      gl.uniform3fv(vec3UniformLoc,  [v0, v1, v2]);      // for vec3 or vec3 array
+      gl.uniform4f (vec4UniformLoc,  v0, v1, v2, v4);    // for vec4
+      gl.uniform4fv(vec4UniformLoc,  [v0, v1, v2, v4]);  // for vec4 or vec4 array
+      
+      gl.uniformMatrix2fv(mat2UniformLoc, false, [  4x element array ])  // for mat2 or mat2 array
+      gl.uniformMatrix3fv(mat3UniformLoc, false, [  9x element array ])  // for mat3 or mat3 array
+      gl.uniformMatrix4fv(mat4UniformLoc, false, [ 16x element array ])  // for mat4 or mat4 array
+      
+      gl.uniform1i (intUniformLoc,   v);                 // for int
+      gl.uniform1iv(intUniformLoc, [v]);                 // for int or int array
+      gl.uniform2i (ivec2UniformLoc, v0, v1);            // for ivec2
+      gl.uniform2iv(ivec2UniformLoc, [v0, v1]);          // for ivec2 or ivec2 array
+      gl.uniform3i (ivec3UniformLoc, v0, v1, v2);        // for ivec3
+      gl.uniform3iv(ivec3UniformLoc, [v0, v1, v2]);      // for ivec3 or ivec3 array
+      gl.uniform4i (ivec4UniformLoc, v0, v1, v2, v4);    // for ivec4
+      gl.uniform4iv(ivec4UniformLoc, [v0, v1, v2, v4]);  // for ivec4 or ivec4 array
+      
+      gl.uniform1u (intUniformLoc,   v);                 // for uint
+      gl.uniform1uv(intUniformLoc, [v]);                 // for uint or uint array
+      gl.uniform2u (ivec2UniformLoc, v0, v1);            // for uvec2
+      gl.uniform2uv(ivec2UniformLoc, [v0, v1]);          // for uvec2 or uvec2 array
+      gl.uniform3u (ivec3UniformLoc, v0, v1, v2);        // for uvec3
+      gl.uniform3uv(ivec3UniformLoc, [v0, v1, v2]);      // for uvec3 or uvec3 array
+      gl.uniform4u (ivec4UniformLoc, v0, v1, v2, v4);    // for uvec4
+      gl.uniform4uv(ivec4UniformLoc, [v0, v1, v2, v4]);  // for uvec4 or uvec4 array
+      
+      // for sampler2D, sampler3D, samplerCube, samplerCubeShader, sampler2DShadow,
+      // sampler2DArray, sampler2DArrayShadow
+      gl.uniform1i (samplerUniformLoc,   v);
+      gl.uniform1iv(samplerUniformLoc, [v]);
+      是否有bool, bvec2, bvec3, 和bvec4的类型呢？ 是的，可以使用类似 gl.uniform?f?, gl.uniform?i?, or gl.uniform?u?的方法名。
+    3、纹理 (来自 pixels/texels 的数据)
+  2、片段着色器的任务是给栅格化的像素提供颜色。对每个像素都会调用一次片段着色器。每次调用，它要求你赋值颜色值给这个输出变量。片段着色器获取数据的方式有一下三种：
+    1、Uniforms (每个像素的每次调用，其值都是相同)
+    2、纹理 (来自于像素或纹素(texel)的数据)
+      为从着色器中的纹理获取值，我们创建一个sampler2D的 Uniform 并使用 GLSL 函数texture从中提取一个值。
+      precision highp float;
+ 
+      uniform sampler2D u_texture;
+      
+      out vec4 outColor;
+      
+      void main() {
+        vec2 texcoord = vec2(0.5, 0.5)  // get a value from the middle of the texture
+        outColor = texture(u_texture, texcoord);
+      }
+      从纹理中输出什么数据取决于很多设置。至少我们需要创建数据并放入到纹理去中。
+      var tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      var level = 0;
+      var internalFormat = gl.RGBA,
+      var width = 2;
+      var height = 1;
+      var border = 0; // MUST ALWAYS BE ZERO
+      var format = gl.RGBA;
+      var type = gl.UNSIGNED_BYTE;
+      var data = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255]);
+      gl.texImage2D(gl.TEXTURE_2D,
+                    level,
+                    internalFormat,
+                    width,
+                    height,
+                    border,
+                    format,
+                    type,
+                    data);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      然后再着色器程序中查找 uniform 的位置。
+      var someSamplerLoc = gl.getUniformLocation(someProgram, "u_texture");
+      WebGL 要求你必须绑定它到纹理单元去。
+      var unit = 5;  // Pick some texture unit
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      最后告诉着色器要绑定哪个单元(unit)到纹理中去。
+      gl.uniform1i(someSamplerLoc, unit);
+    3、Varyings (来自于点着色器的数据或插值的数据)
+      使用 varying 时，我们首先要在点着色器和片段着色器中声明匹配的 varyings。输出 varying 的值在点着色器中设置。 当 WebGL 画像素的时候，它将可选地在这些值之间插值，并将它们传递给对应输入片段着色器。
+
+19、属性类型可以是 float, vec2, vec3, vec4, mat2, mat3, mat4, int, ivec2, ivec3, ivec4, uint, uvec2, uvec3, uvec4.
+
+20、注意，对于一个数组，你可以一次性设置这个数组每个元素的值。比如：
+  // in shader
+  uniform vec2 u_someVec2[3];
+  
+  // in JavaScript at init time
+  var someVec2Loc = gl.getUniformLocation(someProgram, "u_someVec2");
+  
+  // at render time
+  gl.uniform2fv(someVec2Loc, [1, 2, 3, 4, 5, 6]);  // set the entire array of u_someVec2
+  如果你想分别设置数组元素的值，你必须分别查找数组的各个元素。
+  // in JavaScript at init time
+  var someVec2Element0Loc = gl.getUniformLocation(someProgram, "u_someVec2[0]");
+  var someVec2Element1Loc = gl.getUniformLocation(someProgram, "u_someVec2[1]");
+  var someVec2Element2Loc = gl.getUniformLocation(someProgram, "u_someVec2[2]");
+ 
+  // at render time
+  gl.uniform2fv(someVec2Element0Loc, [1, 2]);  // set element 0
+  gl.uniform2fv(someVec2Element1Loc, [3, 4]);  // set element 1
+  gl.uniform2fv(someVec2Element2Loc, [5, 6]);  // set element 2
+  类似做法，还可以创建结构体
+  struct SomeStruct {
+    bool active;
+    vec2 someVec2;
+  };
+  uniform SomeStruct u_someThing;
+  这样，你不得不分别查找这个结构体的各个域：
+  var someThingActiveLoc = gl.getUniformLocation(someProgram, "u_someThing.active");
+  var someThingSomeVec2Loc = gl.getUniformLocation(someProgram, "u_someThing.someVec2");
+
+21、GLSL 全称是图形库着色器语言. 它是一种编写着色器的语言。它有一些在 Javascript 中不常见的特性。它主要被设计用来执行数学计算，以对图形进行光栅化。 因此，它内置了 vec2, vec3 和 vec4 之类的类型，分别表示 2 维，3 维和 4 维向量。类似也有mat2, mat3和mat4， 分别表示 2X2, 3X3 和 4X4的矩阵。你可以执行一些操作，如将vec乘以标量。
+  类似地，它可以执行矩阵乘法运行和向量与矩阵的乘法运行
+  同时，它有选择向量不同部分的选择器。对于vec4,
+    v.x与 v.s、v.r 和 v[0]的意思一样.
+    v.y与 v.t、v.g 和 v[1]的意思一样.
+    v.z与 v.p、v.b 和 v[2]的意思一样.
+    v.w与 v.q、v.a 和 v[3]的意思一样.
+  你还可以交换或重复向量的部分，实例如下：
+  v.yyyy
+  的意思是：
+  vec4(v.y, v.y, v.y, v.y)
+  类似的
+  v.bgra
+  的意思是
+  vec4(v.b, v.g, v.r, v.a)
+  当构建一个向量或矩阵的时候，你能够一次性提供多部分的数据。请看示例：
+  vec4(v.rgb, 1)
+  的意思是
+  vec4(v.r, v.g, v.b, 1)
+  一点需要注意的是，GLSL的类型检查非常严格。
+  float f = 1;  // ERROR 1 is an int. You can't assign an int to a float
+  正确的方式应该是
+  float f = 1.0;      // use float
+  float f = float(1)  // cast the integer to a float
+  前面的例子vec4(v.rgb, 1)并没有对1的类型报错，是因为vec4内部做了强制转化float(1)
+  GLSL有大量的内置函数。许多操作能够一次性处理向量的多个部分。例如
+  T sin(T angle)
+  这里的T能够是float, vec2, vec3 or vec4。如果你传参vec4,返回也是vec4类型。 如下，v是vec4
+  vec4 s = sin(v);
+  的意思是
+  vec4 s = vec4(sin(v.x), sin(v.y), sin(v.z), sin(v.w));
+  有时一个参数是浮点数，剩下的是T，意味着这个浮点数会作用到向量的所有部分。 例如下面例子里，v1和v2是vec4，f是浮点数，
+  vec4 m = mix(v1, v2, f);
+  它的意思是
+  vec4 m = vec4(
+  mix(v1.x, v2.x, f),
+  mix(v1.y, v2.y, f),
+  mix(v1.z, v2.z, f),
+  mix(v1.w, v2.w, f));
+
+22、 WebGL就是创建各种着色器，提供数据到那些着色器， 然后调用gl.drawArrays，gl.drawElements等进行处理---为每个顶点调用当 前的顶点着色器来绘制顶点，然后为每个像素通调用当前片段着色器。
+
+23、单位圆上的点还有一个名字，叫做正弦和余弦。所以对于任意给定角， 我们只需要求出正弦和余弦，像这样
+  function printSineAndCosineForAnAngle(angleInDegrees) {
+    var angleInRadians = angleInDegrees * Math.PI / 180;
+    var s = Math.sin(angleInRadians);
+    var c = Math.cos(angleInRadians);
+    console.log("s = " + s + " c = " + c);
+  }
+
+24、弧度是什么?
+  弧度是圈，旋转和角度的一个单位。就像可以用英尺，米，码等单位来表示距离一样，我们可以用角度或弧度来量测角。
+  弧度和角度的对比是相似的，角度不易计算，弧度简单一些。一圈有360度但是只有 2π 弧度。所以一半是 1π 弧度，90度是 1/2π 弧度。如果想旋转90度只需要使用 Math.PI * 0.5，45度只需要使用 Math.PI * 0.25，以此类推。
+
+25、clientWidth 和 clientHeight是什么?
+  在此之前每当我使用画布的大小时都用的 canvas.width 和 canvas.height，但是这篇文章中使用 m3.projection 时却用了 canvas.clientWidth 和 canvas.clientHeight，为什么?
+  投影矩阵是将坐标在裁剪空间(各方向单位为 -1 到 +1 )和像素空间之间进行转换。但是在浏览器中，有两种类型的像素空间，一种是画布本身的表现的像素个数，所以例子中画布是这样定义的。
+    <canvas width="400" height="300"></canvas>
+  或者像这样定义
+    var canvas = document.createElement("canvas");
+    canvas.width = 400;
+    canvas.height = 300;
+  两种都包含一个400像素宽300像素高的图像，但是这个大小和浏览器显示的 400×300 像素的画布是有区别的，CSS决定画布在浏览器中占用的实际像素个数。例如我们定义一个这样的画布。
+    <style>
+      canvas {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+    ...
+    <canvas width="400" height="300"></canvas>
+  画布的大小将会和他所在的容器一样大，很可能不是 400×300 。
+  这有两个例子，都设置画布大小为 100%，所以画布会被拉伸到页面大小。第一个例子使用 canvas.width 和 canvas.height，在新窗口中打开，然后改变窗口大小，会发现 'F' 的比例失调，变得扭曲了。
+  第二个例子使用 canvas.clientWidth 和 canvas.clientHeight， canvas.clientWidth 和 canvas.clientHeight返回的是画布在浏览器中实际显示的大小，所以在这个例子中，即使画布还是 400x300 像素，但是长宽比是按照画布实际大小设置的，最终F 看起来始终正常。
+  大多数程序在画布大小改变时都会保持 canvas.width 和 canvas.height 与 canvas.clientWidth 和 canvas.clientHeight一致， 因为他们希望屏幕一像素对应绘制一像素。但是我们之前看到，那并不是唯一的选择，也就是说在大多数情况下正确的做法是用 canvas.clientHeight 和 canvas.clientWidth。 然后，无论画布的宽度和高度是否与浏览器绘制画布的大小相匹配，您都将获得正确的长宽比。
+
+26、WebGL 中的三角形有正反面的概念，正面三角形的顶点顺序是逆时针方向， 反面三角形是顺时针方向。WebGL 可以只绘制正面或反面三角形，可以这样开启
+  gl.enable(gl.CULL_FACE)
+  开启这个特性后 WebGL 默认“剔除”背面三角形， "剔除"在这里是“不用绘制”的花哨叫法。
+  对于 WebGL 而言，一个三角形是顺时针还是逆时针是根据裁剪空间中的顶点顺序判断的， 换句话说，WebGL 是根据你在顶点着色器中运算后提供的结果来判定的， 这就意味着如果你把一个顺时针的三角形沿 X 轴缩放 -1 ，它将会变成逆时针， 或者将顺时针的三角形旋转 180 度后变成逆时针。由于我们没有开启 CULL_FACE， 所以可以同时看到顺时针（正面）和逆时针（反面）三角形。现在开启了， 任何时候正面三角形无论是缩放还是旋转的原因导致翻转了，WebGL 就不会绘制它。 这件事很有用，因为通常情况下你只需要看到你正面对的面。
+
+27、DEPTH BUFFER（深度缓冲）
+  深度缓冲有时也叫 Z-Buffer，是一个存储像素深度的矩形， 一个深度像素对应一个着色像素，在绘制图像时组合使用。 当 WebGL 绘制每个着色像素时也会写入深度像素， 它的值基于顶点着色器返回的 Z 值，就像我们将 X 和 Y 转换到裁剪空间一样， Z 也在裁剪空间或者 (-1 到 +1) 。这个值会被转换到深度空间( 0 到 +1)， WebGL 绘制一个着色像素之前会检查对应的深度像素， 如果对应的深度像素中的深度值小于当前像素的深度值，WebGL 就不会绘制新的颜色。 反之它会绘制片断着色器提供的新颜色并更新深度像素中的深度值。 这也意味着在其他像素后面的像素不会被绘制。我们可以像这样开启这个特性
+  gl.enable(gl.DEPTH_TEST)
+  在开始绘制前还需要清除深度缓冲为 1.0 。
+    // 绘制场景
+    function drawScene() {
+  
+      ...
+  
+      // 清空画布和深度缓冲
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  
+      ...
